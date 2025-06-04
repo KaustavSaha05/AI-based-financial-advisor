@@ -5,6 +5,7 @@ export interface User {
   email: string;
   firstName: string;
   lastName: string;
+  role: 'user' | 'advisor' | 'admin'; // Add this line
   profilePicture?: string;
   riskTolerance: 'low' | 'medium' | 'high';
   investmentExperience: 'beginner' | 'intermediate' | 'advanced';

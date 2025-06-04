@@ -1,53 +1,15 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
+import { 
+  Portfolio, 
+  Position, 
+  Transaction, 
+  Asset,
+  PerformanceSummary,
+  RiskMetrics,
+  AllocationSummary 
+} from '../../types/portfolio.types';
 
-export interface Asset {
-  id: string;
-  symbol: string;
-  name: string;
-  type: 'stock' | 'bond' | 'etf' | 'mutual_fund' | 'crypto' | 'commodity';
-  quantity: number;
-  avgCostBasis: number;
-  currentPrice: number;
-  marketValue: number;
-  dayChange: number;
-  dayChangePercent: number;
-  totalReturn: number;
-  totalReturnPercent: number;
-  sector?: string;
-  allocation: number; // Percentage of portfolio
-  lastUpdated: string;
-}
-
-export interface Transaction {
-  id: string;
-  portfolioId: string;
-  assetId: string;
-  type: 'buy' | 'sell' | 'dividend' | 'split';
-  symbol: string;
-  quantity: number;
-  price: number;
-  totalAmount: number;
-  fees: number;
-  date: string;
-  notes?: string;
-}
-
-export interface Portfolio {
-  id: string;
-  name: string;
-  userId: string;
-  totalValue: number;
-  totalCost: number;
-  totalReturn: number;
-  totalReturnPercent: number;
-  dayChange: number;
-  dayChangePercent: number;
-  cashBalance: number;
-  assets: Asset[];
-  createdAt: string;
-  updatedAt: string;
-}
-
+// Updated Portfolio interface to match types
 export interface PortfolioPerformance {
   period: '1D' | '1W' | '1M' | '3M' | '6M' | '1Y' | 'YTD' | 'ALL';
   data: Array<{
@@ -58,33 +20,12 @@ export interface PortfolioPerformance {
   }>;
 }
 
-export interface AssetAllocation {
-  byType: Array<{
-    type: string;
-    value: number;
-    percentage: number;
-    color: string;
-  }>;
-  bySector: Array<{
-    sector: string;
-    value: number;
-    percentage: number;
-    color: string;
-  }>;
-  byRisk: Array<{
-    riskLevel: 'low' | 'medium' | 'high';
-    value: number;
-    percentage: number;
-    color: string;
-  }>;
-}
-
 export interface PortfolioState {
   portfolios: Portfolio[];
   activePortfolio: Portfolio | null;
   transactions: Transaction[];
   performance: PortfolioPerformance | null;
-  allocation: AssetAllocation | null;
+  allocation: AllocationSummary | null;
   isLoading: boolean;
   error: string | null;
   syncStatus: 'idle' | 'syncing' | 'success' | 'error';
@@ -260,7 +201,7 @@ const portfolioSlice = createSlice({
       state.isLoading = true;
       state.error = null;
     },
-    fetchAllocationSuccess: (state, action: PayloadAction<AssetAllocation>) => {
+    fetchAllocationSuccess: (state, action: PayloadAction<AllocationSummary>) => {
       state.isLoading = false;
       state.allocation = action.payload;
       state.error = null;
@@ -270,51 +211,90 @@ const portfolioSlice = createSlice({
       state.error = action.payload;
     },
 
-    // Real-time updates
+    // Real-time updates - Updated to work with Position structure
     updateAssetPrices: (
       state,
       action: PayloadAction<{ [symbol: string]: { price: number; change: number; changePercent: number } }>
     ) => {
       const priceUpdates = action.payload;
       
-      // Update active portfolio assets
+      // Update active portfolio positions
       if (state.activePortfolio) {
-        state.activePortfolio.assets = state.activePortfolio.assets.map(asset => {
-          if (priceUpdates[asset.symbol]) {
-            const update = priceUpdates[asset.symbol];
+        state.activePortfolio.positions = state.activePortfolio.positions.map(position => {
+          if (priceUpdates[position.asset.symbol]) {
+            const update = priceUpdates[position.asset.symbol];
+            const newCurrentValue = position.quantity * update.price;
+            const unrealizedPL = newCurrentValue - position.costBasis;
+            const unrealizedPLPercent = position.costBasis > 0 ? (unrealizedPL / position.costBasis) * 100 : 0;
+            
             return {
-              ...asset,
-              currentPrice: update.price,
-              dayChange: update.change,
-              dayChangePercent: update.changePercent,
-              marketValue: asset.quantity * update.price,
-              totalReturn: (asset.quantity * update.price) - (asset.quantity * asset.avgCostBasis),
-              totalReturnPercent: ((update.price - asset.avgCostBasis) / asset.avgCostBasis) * 100,
+              ...position,
+              asset: {
+                ...position.asset,
+                currentPrice: update.price,
+                priceChange: update.change,
+                priceChangePercent: update.changePercent,
+                lastUpdated: new Date().toISOString(),
+              },
+              currentValue: newCurrentValue,
+              unrealizedPL,
+              unrealizedPLPercent,
               lastUpdated: new Date().toISOString(),
             };
           }
-          return asset;
+          return position;
         });
+
+        // Update portfolio performance summary
+        const totalValue = state.activePortfolio.positions.reduce((sum, pos) => sum + pos.currentValue, 0) + state.activePortfolio.cash;
+        const totalCostBasis = state.activePortfolio.positions.reduce((sum, pos) => sum + pos.costBasis, 0);
+        const totalUnrealizedPL = state.activePortfolio.positions.reduce((sum, pos) => sum + pos.unrealizedPL, 0);
+        
+        state.activePortfolio.totalValue = totalValue;
+        state.activePortfolio.performanceSummary = {
+          ...state.activePortfolio.performanceSummary,
+          totalReturn: totalUnrealizedPL,
+          totalReturnPercent: totalCostBasis > 0 ? (totalUnrealizedPL / totalCostBasis) * 100 : 0,
+          // dailyChange would need to be calculated based on previous day's data
+          dailyChange: 0, // Placeholder
+          dailyChangePercent: 0, // Placeholder
+          weeklyChange: 0,
+          weeklyChangePercent: 0,
+          monthlyChange: 0,
+          monthlyChangePercent: 0,
+          yearlyChange: 0,
+          yearlyChangePercent: 0,
+          allTimeChange: totalUnrealizedPL,
+          allTimeChangePercent: totalCostBasis > 0 ? (totalUnrealizedPL / totalCostBasis) * 100 : 0,
+        };
       }
 
       // Update all portfolios
       state.portfolios = state.portfolios.map(portfolio => ({
         ...portfolio,
-        assets: portfolio.assets.map(asset => {
-          if (priceUpdates[asset.symbol]) {
-            const update = priceUpdates[asset.symbol];
+        positions: portfolio.positions.map(position => {
+          if (priceUpdates[position.asset.symbol]) {
+            const update = priceUpdates[position.asset.symbol];
+            const newCurrentValue = position.quantity * update.price;
+            const unrealizedPL = newCurrentValue - position.costBasis;
+            const unrealizedPLPercent = position.costBasis > 0 ? (unrealizedPL / position.costBasis) * 100 : 0;
+            
             return {
-              ...asset,
-              currentPrice: update.price,
-              dayChange: update.change,
-              dayChangePercent: update.changePercent,
-              marketValue: asset.quantity * update.price,
-              totalReturn: (asset.quantity * update.price) - (asset.quantity * asset.avgCostBasis),
-              totalReturnPercent: ((update.price - asset.avgCostBasis) / asset.avgCostBasis) * 100,
+              ...position,
+              asset: {
+                ...position.asset,
+                currentPrice: update.price,
+                priceChange: update.change,
+                priceChangePercent: update.changePercent,
+                lastUpdated: new Date().toISOString(),
+              },
+              currentValue: newCurrentValue,
+              unrealizedPL,
+              unrealizedPLPercent,
               lastUpdated: new Date().toISOString(),
             };
           }
-          return asset;
+          return position;
         }),
       }));
     },
